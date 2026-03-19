@@ -4,7 +4,7 @@ This repository contains a Next.js backend for the school fees payment flow show
 
 ## What it does
 
-- Stores classes and students in PostgreSQL.
+- Stores classes and students in MySQL for this development phase.
 - Returns a student's full name, class, and fee when the frontend supplies a student ID.
 - Supports bulk student lookup for the payment screen so the frontend can render all students and a combined total.
 - Lets an admin map fees to classes, add students to classes, remove students from classes, and list students by class.
@@ -12,45 +12,25 @@ This repository contains a Next.js backend for the school fees payment flow show
 
 ## Environment variables
 
-
-Create a `.env.local` file using the values below. Supabase SSR support now also expects the public URL and publishable key:
-
-```bash
-NEXT_PUBLIC_SUPABASE_URL=https://agkiflhgcvahluchgqfh.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY=sb_publishable_qjaGtwbKD7fN38Vb-XA8dA_PaEhjXuC
-
 Create a `.env.local` file using the values below:
 
 ```bash
-
-POSTGRES_HOST=db.agkiflhgcvahluchgqfh.supabase.co
-POSTGRES_PORT=5432
-POSTGRES_DATABASE=postgres
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=Bankai2005!!!@@
-POSTGRES_SSL=true
+MYSQL_HOST=127.0.0.1
+MYSQL_PORT=3306
+MYSQL_DATABASE=fees_backend
+MYSQL_USER=root
+MYSQL_PASSWORD=password
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=admin
 SESSION_SECRET=replace-this-secret-before-production
 ```
-
-> The connection is configured using discrete variables instead of a single URL because the supplied password includes multiple `@` characters.
 
 ## Admin access
 
 - Admin UI: `/admin/login`
 - Testing credentials: `admin` / `admin`
 - Protected admin features use a signed HTTP-only cookie, `SameSite=Strict`, middleware-based route protection, and login rate limiting.
-- **Important:** the supplied `admin/admin` login is only for testing; change it before production.
-
-
-
-## Supabase integration
-
-- The app now includes `utils/supabase/server.ts`, `utils/supabase/client.ts`, and `utils/supabase/middleware.ts` helpers for SSR/browser clients and middleware session refresh.
-- The home page demonstrates a server-side Supabase query against a `todos` table so you can verify the integration immediately.
-- If you do not have a `todos` table yet, the page will render the Supabase error message instead of crashing.
-
+- The admin session signing now uses Web Crypto so it also works in the Next.js Edge runtime.
 
 ## API endpoints
 

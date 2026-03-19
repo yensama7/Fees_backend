@@ -1,21 +1,12 @@
-import { Pool } from 'pg';
+import mysql, { Pool, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 
 const connectionConfig = {
-  host: process.env.POSTGRES_HOST,
-  port: Number(process.env.POSTGRES_PORT ?? 5432),
-  database: process.env.POSTGRES_DATABASE,
-  user: process.env.POSTGRES_USER,
-  password: process.env.POSTGRES_PASSWORD,
-  ssl: process.env.POSTGRES_SSL === 'false' ? false : { rejectUnauthorized: false },
+  host: process.env.MYSQL_HOST ?? '127.0.0.1',
+  port: Number(process.env.MYSQL_PORT ?? 3306),
+  database: process.env.MYSQL_DATABASE ?? 'fees_backend',
+  user: process.env.MYSQL_USER ?? 'root',
+  password: process.env.MYSQL_PASSWORD ?? 'password',
 };
-
-const requiredKeys = ['POSTGRES_HOST', 'POSTGRES_DATABASE', 'POSTGRES_USER', 'POSTGRES_PASSWORD'] as const;
-
-for (const key of requiredKeys) {
-  if (!process.env[key]) {
-    console.warn(`Missing environment variable: ${key}`);
-  }
-}
 
 const globalForDb = globalThis as typeof globalThis & {
   feesPool?: Pool;
@@ -24,66 +15,75 @@ const globalForDb = globalThis as typeof globalThis & {
 
 export const pool =
   globalForDb.feesPool ??
-  new Pool({
+  mysql.createPool({
     ...connectionConfig,
-    max: 10,
+    waitForConnections: true,
+    connectionLimit: 10,
+    namedPlaceholders: false,
   });
 
 if (process.env.NODE_ENV !== 'production') {
   globalForDb.feesPool = pool;
 }
 
-const schemaSql = `
-CREATE TABLE IF NOT EXISTS classes (
-  id SERIAL PRIMARY KEY,
-  class_code TEXT NOT NULL UNIQUE,
-  class_name TEXT NOT NULL,
-  fee_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS students (
-  id SERIAL PRIMARY KEY,
-  student_id TEXT NOT NULL UNIQUE,
-  first_name TEXT NOT NULL,
-  last_name TEXT NOT NULL,
-  class_id INTEGER REFERENCES classes(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS students_class_id_idx ON students(class_id);
-
-INSERT INTO classes (class_code, class_name, fee_amount)
-VALUES
-  ('GRADE_1', 'Grade 1', 45000),
-  ('GRADE_3', 'Grade 3', 60000),
-  ('GRADE_5', 'Grade 5', 75000),
-  ('GRADE_6', 'Grade 6', 80000)
-ON CONFLICT (class_code) DO NOTHING;
-
-INSERT INTO students (student_id, first_name, last_name, class_id)
-SELECT seed.student_id, seed.first_name, seed.last_name, classes.id
-FROM (
-  VALUES
-    ('STD001', 'John', 'Adeyemi', 'GRADE_5'),
-    ('STD002', 'Ada', 'Okafor', 'GRADE_3'),
-    ('STD003', 'Musa', 'Bello', 'GRADE_6')
-) AS seed(student_id, first_name, last_name, class_code)
-JOIN classes ON classes.class_code = seed.class_code
-ON CONFLICT (student_id) DO NOTHING;
-`;
+const schemaStatements = [
+  `
+    CREATE TABLE IF NOT EXISTS classes (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      class_code VARCHAR(64) NOT NULL UNIQUE,
+      class_name VARCHAR(128) NOT NULL,
+      fee_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB;
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS students (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      student_id VARCHAR(64) NOT NULL UNIQUE,
+      first_name VARCHAR(128) NOT NULL,
+      last_name VARCHAR(128) NOT NULL,
+      class_id INT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      CONSTRAINT fk_students_class FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB;
+  `,
+  `
+    INSERT IGNORE INTO classes (class_code, class_name, fee_amount)
+    VALUES
+      ('GRADE_1', 'Grade 1', 45000),
+      ('GRADE_3', 'Grade 3', 60000),
+      ('GRADE_5', 'Grade 5', 75000),
+      ('GRADE_6', 'Grade 6', 80000);
+  `,
+  `
+    INSERT IGNORE INTO students (student_id, first_name, last_name, class_id)
+    SELECT seed.student_id, seed.first_name, seed.last_name, classes.id
+    FROM (
+      SELECT 'STD001' AS student_id, 'John' AS first_name, 'Adeyemi' AS last_name, 'GRADE_5' AS class_code
+      UNION ALL
+      SELECT 'STD002', 'Ada', 'Okafor', 'GRADE_3'
+      UNION ALL
+      SELECT 'STD003', 'Musa', 'Bello', 'GRADE_6'
+    ) AS seed
+    INNER JOIN classes ON classes.class_code = seed.class_code;
+  `,
+];
 
 export async function ensureSchema(): Promise<void> {
   if (!globalForDb.schemaPromise) {
-    globalForDb.schemaPromise = pool.query(schemaSql).then(() => undefined);
+    globalForDb.schemaPromise = (async () => {
+      for (const statement of schemaStatements) {
+        await pool.query(statement);
+      }
+    })();
   }
 
   return globalForDb.schemaPromise;
 }
 
-export type StudentRecord = {
+export type StudentRecord = RowDataPacket & {
   student_id: string;
   first_name: string;
   last_name: string;
@@ -92,10 +92,17 @@ export type StudentRecord = {
   fee_amount: string | null;
 };
 
+type ClassDashboardRecord = RowDataPacket & {
+  class_code: string;
+  class_name: string;
+  fee_amount: string;
+  student_count: number;
+};
+
 export async function getStudentByStudentId(studentId: string): Promise<StudentRecord | null> {
   await ensureSchema();
 
-  const result = await pool.query<StudentRecord>(
+  const [rows] = await pool.query<StudentRecord[]>(
     `
       SELECT
         students.student_id,
@@ -103,21 +110,22 @@ export async function getStudentByStudentId(studentId: string): Promise<StudentR
         students.last_name,
         classes.class_code,
         classes.class_name,
-        classes.fee_amount::TEXT AS fee_amount
+        CAST(classes.fee_amount AS CHAR) AS fee_amount
       FROM students
       LEFT JOIN classes ON classes.id = students.class_id
-      WHERE students.student_id = $1
+      WHERE students.student_id = ?
+      LIMIT 1
     `,
     [studentId],
   );
 
-  return result.rows[0] ?? null;
+  return rows[0] ?? null;
 }
 
-export async function getStudentsByClassId(classId: string) {
+export async function getStudentsByClassId(classId: string): Promise<StudentRecord[]> {
   await ensureSchema();
 
-  const result = await pool.query<StudentRecord>(
+  const [rows] = await pool.query<StudentRecord[]>(
     `
       SELECT
         students.student_id,
@@ -125,16 +133,16 @@ export async function getStudentsByClassId(classId: string) {
         students.last_name,
         classes.class_code,
         classes.class_name,
-        classes.fee_amount::TEXT AS fee_amount
+        CAST(classes.fee_amount AS CHAR) AS fee_amount
       FROM students
       INNER JOIN classes ON classes.id = students.class_id
-      WHERE classes.class_code = $1
+      WHERE classes.class_code = ?
       ORDER BY students.student_id ASC
     `,
     [classId],
   );
 
-  return result.rows;
+  return rows;
 }
 
 export async function upsertClassFee(classId: string, feeAmount: number) {
@@ -145,18 +153,29 @@ export async function upsertClassFee(classId: string, feeAmount: number) {
     .replaceAll('_', ' ')
     .replace(/\b\w/g, (character) => character.toUpperCase());
 
-  const result = await pool.query(
+  await pool.query(
     `
       INSERT INTO classes (class_code, class_name, fee_amount)
-      VALUES ($1, $2, $3)
-      ON CONFLICT (class_code)
-      DO UPDATE SET fee_amount = EXCLUDED.fee_amount, updated_at = NOW()
-      RETURNING class_code, class_name, fee_amount::TEXT AS fee_amount
+      VALUES (?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        class_name = VALUES(class_name),
+        fee_amount = VALUES(fee_amount),
+        updated_at = CURRENT_TIMESTAMP
     `,
     [classId, displayName, feeAmount],
   );
 
-  return result.rows[0];
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `
+      SELECT class_code, class_name, CAST(fee_amount AS CHAR) AS fee_amount
+      FROM classes
+      WHERE class_code = ?
+      LIMIT 1
+    `,
+    [classId],
+  );
+
+  return rows[0];
 }
 
 export async function assignStudentToClass(input: {
@@ -167,52 +186,43 @@ export async function assignStudentToClass(input: {
 }) {
   await ensureSchema();
 
-  const classResult = await pool.query<{ id: number }>(`SELECT id FROM classes WHERE class_code = $1`, [input.classId]);
-  if (classResult.rowCount === 0) {
+  const [classRows] = await pool.query<RowDataPacket[]>(`SELECT id FROM classes WHERE class_code = ? LIMIT 1`, [input.classId]);
+  if (classRows.length === 0) {
     throw new Error(`Class ${input.classId} does not exist. Create or map fees for the class first.`);
   }
 
-  const classPk = classResult.rows[0].id;
+  const classPk = Number(classRows[0].id);
 
-  const result = await pool.query<StudentRecord>(
+  await pool.query(
     `
       INSERT INTO students (student_id, first_name, last_name, class_id)
-      VALUES ($1, COALESCE($2, 'Unknown'), COALESCE($3, 'Student'), $4)
-      ON CONFLICT (student_id)
-      DO UPDATE SET
-        first_name = COALESCE(EXCLUDED.first_name, students.first_name),
-        last_name = COALESCE(EXCLUDED.last_name, students.last_name),
-        class_id = EXCLUDED.class_id,
-        updated_at = NOW()
-      RETURNING
-        student_id,
-        first_name,
-        last_name,
-        NULL::TEXT AS class_code,
-        NULL::TEXT AS class_name,
-        NULL::TEXT AS fee_amount
+      VALUES (?, COALESCE(?, 'Unknown'), COALESCE(?, 'Student'), ?)
+      ON DUPLICATE KEY UPDATE
+        first_name = VALUES(first_name),
+        last_name = VALUES(last_name),
+        class_id = VALUES(class_id),
+        updated_at = CURRENT_TIMESTAMP
     `,
-    [input.studentId, input.firstName ?? null, input.lastName ?? null, classPk],
+    [input.studentId, input.firstName || null, input.lastName || null, classPk],
   );
 
-  return getStudentByStudentId(result.rows[0].student_id);
+  return getStudentByStudentId(input.studentId);
 }
 
 export async function removeStudentFromClass(classId: string, studentId: string) {
   await ensureSchema();
 
-  const result = await pool.query(
+  const [result] = await pool.query<ResultSetHeader>(
     `
       UPDATE students
-      SET class_id = NULL, updated_at = NOW()
-      WHERE student_id = $1
-        AND class_id = (SELECT id FROM classes WHERE class_code = $2)
-      RETURNING student_id
+      SET class_id = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE student_id = ?
+        AND class_id = (SELECT id FROM classes WHERE class_code = ? LIMIT 1)
     `,
     [studentId, classId],
   );
 
-  return result.rowCount > 0;
+  return result.affectedRows > 0;
 }
 
 export async function lookupPaymentDetails(studentIds: string[]) {
@@ -227,7 +237,8 @@ export async function lookupPaymentDetails(studentIds: string[]) {
     };
   }
 
-  const result = await pool.query<StudentRecord>(
+  const placeholders = cleanedIds.map(() => '?').join(', ');
+  const [rows] = await pool.query<StudentRecord[]>(
     `
       SELECT
         students.student_id,
@@ -235,20 +246,20 @@ export async function lookupPaymentDetails(studentIds: string[]) {
         students.last_name,
         classes.class_code,
         classes.class_name,
-        classes.fee_amount::TEXT AS fee_amount
+        CAST(classes.fee_amount AS CHAR) AS fee_amount
       FROM students
       LEFT JOIN classes ON classes.id = students.class_id
-      WHERE students.student_id = ANY($1::TEXT[])
+      WHERE students.student_id IN (${placeholders})
       ORDER BY students.student_id ASC
     `,
-    [cleanedIds],
+    cleanedIds,
   );
 
-  const foundIds = new Set(result.rows.map((row: StudentRecord) => row.student_id));
-  const totalFee = result.rows.reduce((sum: number, row: StudentRecord) => sum + Number(row.fee_amount ?? 0), 0);
+  const foundIds = new Set(rows.map((row) => row.student_id));
+  const totalFee = rows.reduce((sum, row) => sum + Number(row.fee_amount ?? 0), 0);
 
   return {
-    students: result.rows,
+    students: rows,
     totalFee,
     missingStudentIds: cleanedIds.filter((studentId) => !foundIds.has(studentId)),
   };
@@ -257,35 +268,34 @@ export async function lookupPaymentDetails(studentIds: string[]) {
 export async function getAdminDashboardData() {
   await ensureSchema();
 
-  const [classesResult, studentsResult] = await Promise.all([
-    pool.query<{ class_code: string; class_name: string; fee_amount: string; student_count: string }>(
-      `
-        SELECT
-          classes.class_code,
-          classes.class_name,
-          classes.fee_amount::TEXT AS fee_amount,
-          COUNT(students.id)::TEXT AS student_count
-        FROM classes
-        LEFT JOIN students ON students.class_id = classes.id
-        GROUP BY classes.id
-        ORDER BY classes.class_name ASC
-      `,
-    ),
-    pool.query<StudentRecord>(
-      `
-        SELECT
-          students.student_id,
-          students.first_name,
-          students.last_name,
-          classes.class_code,
-          classes.class_name,
-          classes.fee_amount::TEXT AS fee_amount
-        FROM students
-        LEFT JOIN classes ON classes.id = students.class_id
-        ORDER BY students.student_id ASC
-      `,
-    ),
-  ]);
+  const [classesRows] = await pool.query<ClassDashboardRecord[]>(
+    `
+      SELECT
+        classes.class_code,
+        classes.class_name,
+        CAST(classes.fee_amount AS CHAR) AS fee_amount,
+        COUNT(students.id) AS student_count
+      FROM classes
+      LEFT JOIN students ON students.class_id = classes.id
+      GROUP BY classes.id, classes.class_code, classes.class_name, classes.fee_amount
+      ORDER BY classes.class_name ASC
+    `,
+  );
+
+  const [studentsRows] = await pool.query<StudentRecord[]>(
+    `
+      SELECT
+        students.student_id,
+        students.first_name,
+        students.last_name,
+        classes.class_code,
+        classes.class_name,
+        CAST(classes.fee_amount AS CHAR) AS fee_amount
+      FROM students
+      LEFT JOIN classes ON classes.id = students.class_id
+      ORDER BY students.student_id ASC
+    `,
+  );
 
   const formatter = new Intl.NumberFormat('en-NG', {
     style: 'currency',
@@ -294,14 +304,14 @@ export async function getAdminDashboardData() {
   });
 
   return {
-    classes: classesResult.rows.map((row: { class_code: string; class_name: string; fee_amount: string; student_count: string }) => ({
+    classes: classesRows.map((row) => ({
       classCode: row.class_code,
       className: row.class_name,
       feeAmount: Number(row.fee_amount),
       feeDisplay: formatter.format(Number(row.fee_amount)),
       studentCount: Number(row.student_count),
     })),
-    students: studentsResult.rows.map((student: StudentRecord) => ({
+    students: studentsRows.map((student) => ({
       studentId: student.student_id,
       fullName: `${student.first_name} ${student.last_name}`,
       classCode: student.class_code,

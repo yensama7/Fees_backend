@@ -10,11 +10,11 @@ export async function OPTIONS(request: NextRequest) {
 export async function GET(request: NextRequest) {
   try {
     await ensureSchema();
-    const result = await pool.query('SELECT NOW() AS connected_at');
+    const [rows] = await pool.query<{ connected_at: string }[]>(`SELECT NOW() AS connected_at`);
 
     return ok(request, {
       status: 'healthy',
-      connectedAt: result.rows[0]?.connected_at,
+      connectedAt: rows[0]?.connected_at ?? null,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';

@@ -4,8 +4,8 @@ import { handleOptions } from '@/lib/cors';
 import { getAdminSessionFromRequest } from '@/lib/auth';
 import { fail, ok } from '@/lib/responses';
 
-function ensureAdmin(request: NextRequest) {
-  if (!getAdminSessionFromRequest(request)) {
+async function ensureAdmin(request: NextRequest) {
+  if (!(await getAdminSessionFromRequest(request))) {
     return fail(request, 'Admin authentication is required.', 401);
   }
 
@@ -21,7 +21,7 @@ export async function GET(
   { params }: { params: { classId: string } },
 ) {
   try {
-    const unauthorized = ensureAdmin(request);
+    const unauthorized = await ensureAdmin(request);
     if (unauthorized) {
       return unauthorized;
     }
@@ -53,7 +53,7 @@ export async function POST(
   { params }: { params: { classId: string } },
 ) {
   try {
-    const unauthorized = ensureAdmin(request);
+    const unauthorized = await ensureAdmin(request);
     if (unauthorized) {
       return unauthorized;
     }
@@ -105,7 +105,7 @@ export async function DELETE(
   { params }: { params: { classId: string } },
 ) {
   try {
-    const unauthorized = ensureAdmin(request);
+    const unauthorized = await ensureAdmin(request);
     if (unauthorized) {
       return unauthorized;
     }

@@ -48,9 +48,8 @@ export default function HomePage() {
         <p className="eyebrow">Backend ready</p>
         <h1>School Fees Payment API</h1>
         <p>
-          This Next.js application exposes the backend described in the sketch: the frontend submits one or more
-          student IDs, and the API returns each student&apos;s name, class, and payable fee from PostgreSQL. It also
-          includes a protected admin dashboard for managing class fees and student enrollment.
+          This development version uses MySQL for persistence and keeps the payment lookup/admin workflows focused on
+          the school fees use case without PostgreSQL or Supabase dependencies.
         </p>
 
         <h2>Available endpoints</h2>

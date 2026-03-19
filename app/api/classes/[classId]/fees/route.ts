@@ -13,7 +13,7 @@ export async function PUT(
   { params }: { params: { classId: string } },
 ) {
   try {
-    if (!getAdminSessionFromRequest(request)) {
+    if (!(await getAdminSessionFromRequest(request))) {
       return fail(request, 'Admin authentication is required.', 401);
     }
 

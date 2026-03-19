@@ -62,9 +62,9 @@ export async function POST(request: NextRequest) {
 
   if (contentType?.includes('application/json')) {
     const response = NextResponse.json({ success: true, data: { redirectTo: redirectTarget } });
-    return buildSecurityHeaders(createAdminSessionResponse(response, username));
+    return buildSecurityHeaders(await createAdminSessionResponse(response, username));
   }
 
   const response = NextResponse.redirect(new URL(redirectTarget, request.url), { status: 303 });
-  return buildSecurityHeaders(createAdminSessionResponse(response, username));
+  return buildSecurityHeaders(await createAdminSessionResponse(response, username));
 }

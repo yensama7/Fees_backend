@@ -1,4 +1,3 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -8,6 +7,7 @@ const MAX_ATTEMPTS = 5;
 const WINDOW_MS = 1000 * 60 * 15;
 
 const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+const encoder = new TextEncoder();
 
 function getEnvValue(value: string | undefined, fallback: string): string {
   return value && value.length > 0 ? value : fallback;
@@ -18,29 +18,45 @@ const adminPassword = getEnvValue(process.env.ADMIN_PASSWORD, 'admin');
 const sessionSecret = getEnvValue(process.env.SESSION_SECRET, 'replace-this-secret-before-production');
 
 function safeEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-
-  if (leftBuffer.length !== rightBuffer.length) {
+  if (left.length !== right.length) {
     return false;
   }
 
-  return timingSafeEqual(leftBuffer, rightBuffer);
+  let mismatch = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+
+  return mismatch === 0;
 }
 
-function signPayload(payload: string): string {
-  return createHmac('sha256', sessionSecret).update(payload).digest('hex');
+function toHex(buffer: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buffer))
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join('');
 }
 
-function encodeSession(username: string): string {
+async function getHmacKey() {
+  return crypto.subtle.importKey('raw', encoder.encode(sessionSecret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+}
+
+async function signPayload(payload: string): Promise<string> {
+  const signature = await crypto.subtle.sign('HMAC', await getHmacKey(), encoder.encode(payload));
+  return toHex(signature);
+}
+
+async function encodeSession(username: string): Promise<string> {
   const expiresAt = Date.now() + SESSION_DURATION_MS;
-  const nonce = randomBytes(16).toString('hex');
+  const nonceBytes = crypto.getRandomValues(new Uint8Array(16));
+  const nonce = Array.from(nonceBytes)
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join('');
   const payload = `${username}.${expiresAt}.${nonce}`;
-  const signature = signPayload(payload);
+  const signature = await signPayload(payload);
   return `${payload}.${signature}`;
 }
 
-function decodeSession(cookieValue: string | undefined): { username: string; expiresAt: number } | null {
+async function decodeSession(cookieValue: string | undefined): Promise<{ username: string; expiresAt: number } | null> {
   if (!cookieValue) {
     return null;
   }
@@ -52,7 +68,7 @@ function decodeSession(cookieValue: string | undefined): { username: string; exp
 
   const [username, expiresAtRaw, nonce, signature] = parts;
   const payload = `${username}.${expiresAtRaw}.${nonce}`;
-  const expectedSignature = signPayload(payload);
+  const expectedSignature = await signPayload(payload);
 
   if (!safeEqual(signature, expectedSignature)) {
     return null;
@@ -110,10 +126,10 @@ export function validateAdminCredentials(username: string, password: string): bo
   return safeEqual(username, adminUsername) && safeEqual(password, adminPassword);
 }
 
-export function createAdminSessionResponse(response: NextResponse, username: string): NextResponse {
+export async function createAdminSessionResponse(response: NextResponse, username: string): Promise<NextResponse> {
   response.cookies.set({
     name: SESSION_COOKIE_NAME,
-    value: encodeSession(username),
+    value: await encodeSession(username),
     httpOnly: true,
     sameSite: 'strict',
     secure: process.env.NODE_ENV === 'production',
@@ -138,7 +154,7 @@ export function clearAdminSessionResponse(response: NextResponse): NextResponse 
   return response;
 }
 
-export function getAdminSessionFromRequest(request: NextRequest): { username: string; expiresAt: number } | null {
+export async function getAdminSessionFromRequest(request: NextRequest): Promise<{ username: string; expiresAt: number } | null> {
   return decodeSession(request.cookies.get(SESSION_COOKIE_NAME)?.value);
 }
 
@@ -152,6 +168,6 @@ export function buildSecurityHeaders(response: NextResponse): NextResponse {
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('Referrer-Policy', 'same-origin');
   response.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  response.headers.set('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'");
+  response.headers.set('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'");
   return response;
 }
