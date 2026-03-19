@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
 
-const SESSION_COOKIE_NAME = 'fees_admin_session';
+export const SESSION_COOKIE_NAME = 'fees_admin_session';
 const SESSION_DURATION_MS = 1000 * 60 * 60 * 8;
 const MAX_ATTEMPTS = 5;
 const WINDOW_MS = 1000 * 60 * 15;
