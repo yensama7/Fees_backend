@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { pool, ensureSchema } from '@/lib/db';
+import { pool, ensureSchema, getDatabaseUnavailableMessage, isDatabaseConnectionError } from '@/lib/db';
 import { fail, ok } from '@/lib/responses';
 import { handleOptions } from '@/lib/cors';
 
@@ -17,7 +17,11 @@ export async function GET(request: NextRequest) {
       connectedAt: rows[0]?.connected_at ?? null,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return fail(request, 'Database connection failed', 500, { message });
+    const message = isDatabaseConnectionError(error)
+      ? getDatabaseUnavailableMessage()
+      : error instanceof Error
+        ? error.message
+        : 'Unknown error';
+    return fail(request, 'Database connection failed', isDatabaseConnectionError(error) ? 503 : 500, { message });
   }
 }

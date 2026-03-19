@@ -71,11 +71,39 @@ const schemaStatements = [
   `,
 ];
 
+export function isDatabaseConnectionError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const mysqlError = error as Error & { code?: string; errno?: number };
+  const message = error.message.toUpperCase();
+
+  return (
+    mysqlError.code === 'ECONNREFUSED' ||
+    mysqlError.code === 'ENOTFOUND' ||
+    mysqlError.code === 'ER_ACCESS_DENIED_ERROR' ||
+    mysqlError.code === 'PROTOCOL_CONNECTION_LOST' ||
+    mysqlError.errno === 2002 ||
+    message.includes('ECONNREFUSED') ||
+    message.includes('ENOTFOUND')
+  );
+}
+
+export function getDatabaseUnavailableMessage() {
+  return `MySQL is unavailable. Start your MySQL server and verify MYSQL_HOST=${connectionConfig.host}, MYSQL_PORT=${connectionConfig.port}, MYSQL_DATABASE=${connectionConfig.database}, and MYSQL_USER=${connectionConfig.user}.`;
+}
+
 export async function ensureSchema(): Promise<void> {
   if (!globalForDb.schemaPromise) {
     globalForDb.schemaPromise = (async () => {
-      for (const statement of schemaStatements) {
-        await pool.query(statement);
+      try {
+        for (const statement of schemaStatements) {
+          await pool.query(statement);
+        }
+      } catch (error) {
+        globalForDb.schemaPromise = undefined;
+        throw error;
       }
     })();
   }
