@@ -12,11 +12,17 @@ This repository contains a Next.js backend for the school fees payment flow show
 
 ## Environment variables
 
+
 Create a `.env.local` file using the values below. Supabase SSR support now also expects the public URL and publishable key:
 
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=https://agkiflhgcvahluchgqfh.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY=sb_publishable_qjaGtwbKD7fN38Vb-XA8dA_PaEhjXuC
+
+Create a `.env.local` file using the values below:
+
+```bash
+
 POSTGRES_HOST=db.agkiflhgcvahluchgqfh.supabase.co
 POSTGRES_PORT=5432
 POSTGRES_DATABASE=postgres
@@ -38,11 +44,13 @@ SESSION_SECRET=replace-this-secret-before-production
 - **Important:** the supplied `admin/admin` login is only for testing; change it before production.
 
 
+
 ## Supabase integration
 
 - The app now includes `utils/supabase/server.ts`, `utils/supabase/client.ts`, and `utils/supabase/middleware.ts` helpers for SSR/browser clients and middleware session refresh.
 - The home page demonstrates a server-side Supabase query against a `todos` table so you can verify the integration immediately.
 - If you do not have a `todos` table yet, the page will render the Supabase error message instead of crashing.
+
 
 ## API endpoints
 

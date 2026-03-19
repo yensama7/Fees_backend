@@ -1,6 +1,3 @@
-import { cookies } from 'next/headers';
-import { createClient } from '@/utils/supabase/server';
-
 const endpoints = [
   {
     method: 'GET',
@@ -44,11 +41,7 @@ const endpoints = [
   },
 ];
 
-export default async function HomePage() {
-  const cookieStore = await cookies();
-  const supabase = createClient(cookieStore);
-  const { data: todos, error } = await supabase.from('todos').select('id, name').limit(5);
-
+export default function HomePage() {
   return (
     <main className="page">
       <section className="card">
@@ -57,7 +50,7 @@ export default async function HomePage() {
         <p>
           This Next.js application exposes the backend described in the sketch: the frontend submits one or more
           student IDs, and the API returns each student&apos;s name, class, and payable fee from PostgreSQL. It also
-          includes a protected admin dashboard and Supabase SSR integration for session-aware data access.
+          includes a protected admin dashboard for managing class fees and student enrollment.
         </p>
 
         <h2>Available endpoints</h2>
@@ -71,21 +64,6 @@ export default async function HomePage() {
             </li>
           ))}
         </ul>
-
-        <h2>Supabase connectivity sample</h2>
-        {error ? (
-          <p className="error-banner">
-            Unable to read the sample <code>todos</code> table from Supabase: {error.message}
-          </p>
-        ) : (
-          <ul className="endpoint-list">
-            {todos?.length ? (
-              todos.map((todo: { id: number | string; name: string }) => <li key={todo.id}>{todo.name}</li>)
-            ) : (
-              <li>No rows were returned from the sample <code>todos</code> table yet.</li>
-            )}
-          </ul>
-        )}
 
         <h2>Expected frontend flow</h2>
         <ol>

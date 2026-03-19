@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildSecurityHeaders, getAdminSessionFromRequest } from '@/lib/auth';
-import { createClient as refreshSupabaseSession } from '@/utils/supabase/middleware';
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -18,9 +17,9 @@ export function middleware(request: NextRequest) {
     return buildSecurityHeaders(NextResponse.redirect(new URL('/admin', request.url)));
   }
 
-  return buildSecurityHeaders(refreshSupabaseSession(request));
+  return buildSecurityHeaders(NextResponse.next());
 }
 
 export const config = {
-  matcher: ['/admin/:path*', '/((?!_next/static|_next/image|favicon.ico).*)'],
+  matcher: ['/admin/:path*'],
 };
