@@ -48,8 +48,8 @@ export default function HomePage() {
         <p className="eyebrow">Backend ready</p>
         <h1>School Fees Payment API</h1>
         <p>
-          This development version uses MySQL for persistence and keeps the payment lookup/admin workflows focused on
-          the school fees use case without PostgreSQL or Supabase dependencies.
+          This development version uses a local SQLite database file, similar to Django&apos;s default development
+          database setup, so you do not need to run a separate database server.
         </p>
 
         <h2>Available endpoints</h2>

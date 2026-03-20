@@ -4,7 +4,7 @@ This repository contains a Next.js backend for the school fees payment flow show
 
 ## What it does
 
-- Stores classes and students in MySQL for this development phase.
+- Stores classes and students in a local SQLite database file for this development phase.
 - Returns a student's full name, class, and fee when the frontend supplies a student ID.
 - Supports bulk student lookup for the payment screen so the frontend can render all students and a combined total.
 - Lets an admin map fees to classes, add students to classes, remove students from classes, and list students by class.
@@ -15,11 +15,7 @@ This repository contains a Next.js backend for the school fees payment flow show
 Create a `.env.local` file using the values below:
 
 ```bash
-MYSQL_HOST=127.0.0.1
-MYSQL_PORT=3306
-MYSQL_DATABASE=fees_backend
-MYSQL_USER=root
-MYSQL_PASSWORD=password
+SQLITE_DATABASE_PATH=./data/fees.sqlite
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=admin
 SESSION_SECRET=replace-this-secret-before-production
@@ -30,7 +26,7 @@ SESSION_SECRET=replace-this-secret-before-production
 - Admin UI: `/admin/login`
 - Testing credentials: `admin` / `admin`
 - Protected admin features use a signed HTTP-only cookie, `SameSite=Strict`, middleware-based route protection, and login rate limiting.
-- The admin session signing now uses Web Crypto so it also works in the Next.js Edge runtime.
+- The admin session signing uses Web Crypto so it also works in the Next.js Edge runtime.
 
 ## API endpoints
 
@@ -38,7 +34,7 @@ SESSION_SECRET=replace-this-secret-before-production
 
 `GET /api/health`
 
-Checks that the database is reachable and the schema can be created.
+Checks that the database file is reachable and the schema can be created.
 
 ### Student details
 

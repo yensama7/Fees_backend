@@ -1,56 +1,89 @@
-import mysql, { Pool, ResultSetHeader, RowDataPacket } from 'mysql2/promise';
+import { mkdirSync } from 'fs';
+import { dirname, resolve } from 'path';
+import sqlite3 from 'sqlite3';
 
-const connectionConfig = {
-  host: process.env.MYSQL_HOST ?? '127.0.0.1',
-  port: Number(process.env.MYSQL_PORT ?? 3306),
-  database: process.env.MYSQL_DATABASE ?? 'fees_backend',
-  user: process.env.MYSQL_USER ?? 'root',
-  password: process.env.MYSQL_PASSWORD ?? 'password',
-};
+const databasePath = resolve(process.env.SQLITE_DATABASE_PATH ?? './data/fees.sqlite');
 
 const globalForDb = globalThis as typeof globalThis & {
-  feesPool?: Pool;
+  feesDb?: sqlite3.Database;
   schemaPromise?: Promise<void>;
 };
 
-export const pool =
-  globalForDb.feesPool ??
-  mysql.createPool({
-    ...connectionConfig,
-    waitForConnections: true,
-    connectionLimit: 10,
-    namedPlaceholders: false,
-  });
+function getDatabase(): sqlite3.Database {
+  if (!globalForDb.feesDb) {
+    mkdirSync(dirname(databasePath), { recursive: true });
+    globalForDb.feesDb = new sqlite3.Database(databasePath);
+    globalForDb.feesDb.exec('PRAGMA foreign_keys = ON;');
+  }
 
-if (process.env.NODE_ENV !== 'production') {
-  globalForDb.feesPool = pool;
+  return globalForDb.feesDb;
+}
+
+export const db = getDatabase();
+
+function run(sql: string, params: unknown[] = []) {
+  return new Promise<{ lastID: number; changes: number }>((resolvePromise, rejectPromise) => {
+    db.run(sql, params, function onRun(error) {
+      if (error) {
+        rejectPromise(error);
+        return;
+      }
+
+      resolvePromise({ lastID: this.lastID, changes: this.changes });
+    });
+  });
+}
+
+function get<T>(sql: string, params: unknown[] = []) {
+  return new Promise<T | undefined>((resolvePromise, rejectPromise) => {
+    db.get(sql, params, (error, row) => {
+      if (error) {
+        rejectPromise(error);
+        return;
+      }
+
+      resolvePromise(row as T | undefined);
+    });
+  });
+}
+
+function all<T>(sql: string, params: unknown[] = []) {
+  return new Promise<T[]>((resolvePromise, rejectPromise) => {
+    db.all(sql, params, (error, rows) => {
+      if (error) {
+        rejectPromise(error);
+        return;
+      }
+
+      resolvePromise((rows ?? []) as T[]);
+    });
+  });
 }
 
 const schemaStatements = [
   `
     CREATE TABLE IF NOT EXISTS classes (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      class_code VARCHAR(64) NOT NULL UNIQUE,
-      class_name VARCHAR(128) NOT NULL,
-      fee_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB;
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      class_code TEXT NOT NULL UNIQUE,
+      class_name TEXT NOT NULL,
+      fee_amount REAL NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `,
   `
     CREATE TABLE IF NOT EXISTS students (
-      id INT AUTO_INCREMENT PRIMARY KEY,
-      student_id VARCHAR(64) NOT NULL UNIQUE,
-      first_name VARCHAR(128) NOT NULL,
-      last_name VARCHAR(128) NOT NULL,
-      class_id INT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      CONSTRAINT fk_students_class FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE SET NULL
-    ) ENGINE=InnoDB;
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id TEXT NOT NULL UNIQUE,
+      first_name TEXT NOT NULL,
+      last_name TEXT NOT NULL,
+      class_id INTEGER NULL REFERENCES classes(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `,
   `
-    INSERT IGNORE INTO classes (class_code, class_name, fee_amount)
+    INSERT OR IGNORE INTO classes (class_code, class_name, fee_amount)
     VALUES
       ('GRADE_1', 'Grade 1', 45000),
       ('GRADE_3', 'Grade 3', 60000),
@@ -58,40 +91,25 @@ const schemaStatements = [
       ('GRADE_6', 'Grade 6', 80000);
   `,
   `
-    INSERT IGNORE INTO students (student_id, first_name, last_name, class_id)
-    SELECT seed.student_id, seed.first_name, seed.last_name, classes.id
-    FROM (
-      SELECT 'STD001' AS student_id, 'John' AS first_name, 'Adeyemi' AS last_name, 'GRADE_5' AS class_code
-      UNION ALL
-      SELECT 'STD002', 'Ada', 'Okafor', 'GRADE_3'
-      UNION ALL
-      SELECT 'STD003', 'Musa', 'Bello', 'GRADE_6'
-    ) AS seed
-    INNER JOIN classes ON classes.class_code = seed.class_code;
+    INSERT OR IGNORE INTO students (student_id, first_name, last_name, class_id)
+    SELECT 'STD001', 'John', 'Adeyemi', id FROM classes WHERE class_code = 'GRADE_5';
+  `,
+  `
+    INSERT OR IGNORE INTO students (student_id, first_name, last_name, class_id)
+    SELECT 'STD002', 'Ada', 'Okafor', id FROM classes WHERE class_code = 'GRADE_3';
+  `,
+  `
+    INSERT OR IGNORE INTO students (student_id, first_name, last_name, class_id)
+    SELECT 'STD003', 'Musa', 'Bello', id FROM classes WHERE class_code = 'GRADE_6';
   `,
 ];
 
 export function isDatabaseConnectionError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  const mysqlError = error as Error & { code?: string; errno?: number };
-  const message = error.message.toUpperCase();
-
-  return (
-    mysqlError.code === 'ECONNREFUSED' ||
-    mysqlError.code === 'ENOTFOUND' ||
-    mysqlError.code === 'ER_ACCESS_DENIED_ERROR' ||
-    mysqlError.code === 'PROTOCOL_CONNECTION_LOST' ||
-    mysqlError.errno === 2002 ||
-    message.includes('ECONNREFUSED') ||
-    message.includes('ENOTFOUND')
-  );
+  return error instanceof Error;
 }
 
 export function getDatabaseUnavailableMessage() {
-  return `MySQL is unavailable. Start your MySQL server and verify MYSQL_HOST=${connectionConfig.host}, MYSQL_PORT=${connectionConfig.port}, MYSQL_DATABASE=${connectionConfig.database}, and MYSQL_USER=${connectionConfig.user}.`;
+  return `SQLite could not be opened. Check SQLITE_DATABASE_PATH=${databasePath} and verify the app can write to that directory.`;
 }
 
 export async function ensureSchema(): Promise<void> {
@@ -99,7 +117,7 @@ export async function ensureSchema(): Promise<void> {
     globalForDb.schemaPromise = (async () => {
       try {
         for (const statement of schemaStatements) {
-          await pool.query(statement);
+          await run(statement);
         }
       } catch (error) {
         globalForDb.schemaPromise = undefined;
@@ -111,7 +129,7 @@ export async function ensureSchema(): Promise<void> {
   return globalForDb.schemaPromise;
 }
 
-export type StudentRecord = RowDataPacket & {
+export type StudentRecord = {
   student_id: string;
   first_name: string;
   last_name: string;
@@ -120,17 +138,32 @@ export type StudentRecord = RowDataPacket & {
   fee_amount: string | null;
 };
 
-type ClassDashboardRecord = RowDataPacket & {
+type ClassDashboardRecord = {
   class_code: string;
   class_name: string;
   fee_amount: string;
   student_count: number;
 };
 
+function mapStudentRow(row: Record<string, unknown> | undefined): StudentRecord | null {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    student_id: String(row.student_id),
+    first_name: String(row.first_name),
+    last_name: String(row.last_name),
+    class_code: row.class_code ? String(row.class_code) : null,
+    class_name: row.class_name ? String(row.class_name) : null,
+    fee_amount: row.fee_amount !== null && row.fee_amount !== undefined ? String(row.fee_amount) : null,
+  };
+}
+
 export async function getStudentByStudentId(studentId: string): Promise<StudentRecord | null> {
   await ensureSchema();
 
-  const [rows] = await pool.query<StudentRecord[]>(
+  const row = await get<Record<string, unknown>>(
     `
       SELECT
         students.student_id,
@@ -138,7 +171,7 @@ export async function getStudentByStudentId(studentId: string): Promise<StudentR
         students.last_name,
         classes.class_code,
         classes.class_name,
-        CAST(classes.fee_amount AS CHAR) AS fee_amount
+        CAST(classes.fee_amount AS TEXT) AS fee_amount
       FROM students
       LEFT JOIN classes ON classes.id = students.class_id
       WHERE students.student_id = ?
@@ -147,13 +180,13 @@ export async function getStudentByStudentId(studentId: string): Promise<StudentR
     [studentId],
   );
 
-  return rows[0] ?? null;
+  return mapStudentRow(row);
 }
 
 export async function getStudentsByClassId(classId: string): Promise<StudentRecord[]> {
   await ensureSchema();
 
-  const [rows] = await pool.query<StudentRecord[]>(
+  const rows = await all<Record<string, unknown>>(
     `
       SELECT
         students.student_id,
@@ -161,7 +194,7 @@ export async function getStudentsByClassId(classId: string): Promise<StudentReco
         students.last_name,
         classes.class_code,
         classes.class_name,
-        CAST(classes.fee_amount AS CHAR) AS fee_amount
+        CAST(classes.fee_amount AS TEXT) AS fee_amount
       FROM students
       INNER JOIN classes ON classes.id = students.class_id
       WHERE classes.class_code = ?
@@ -170,7 +203,7 @@ export async function getStudentsByClassId(classId: string): Promise<StudentReco
     [classId],
   );
 
-  return rows;
+  return rows.map((row) => mapStudentRow(row)).filter((row): row is StudentRecord => row !== null);
 }
 
 export async function upsertClassFee(classId: string, feeAmount: number) {
@@ -181,29 +214,28 @@ export async function upsertClassFee(classId: string, feeAmount: number) {
     .replaceAll('_', ' ')
     .replace(/\b\w/g, (character) => character.toUpperCase());
 
-  await pool.query(
+  await run(
     `
-      INSERT INTO classes (class_code, class_name, fee_amount)
-      VALUES (?, ?, ?)
-      ON DUPLICATE KEY UPDATE
-        class_name = VALUES(class_name),
-        fee_amount = VALUES(fee_amount),
+      INSERT INTO classes (class_code, class_name, fee_amount, updated_at)
+      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(class_code)
+      DO UPDATE SET
+        class_name = excluded.class_name,
+        fee_amount = excluded.fee_amount,
         updated_at = CURRENT_TIMESTAMP
     `,
     [classId, displayName, feeAmount],
   );
 
-  const [rows] = await pool.query<RowDataPacket[]>(
+  return (await get<{ class_code: string; class_name: string; fee_amount: string }>(
     `
-      SELECT class_code, class_name, CAST(fee_amount AS CHAR) AS fee_amount
+      SELECT class_code, class_name, CAST(fee_amount AS TEXT) AS fee_amount
       FROM classes
       WHERE class_code = ?
       LIMIT 1
     `,
     [classId],
-  );
-
-  return rows[0];
+  ))!;
 }
 
 export async function assignStudentToClass(input: {
@@ -214,24 +246,23 @@ export async function assignStudentToClass(input: {
 }) {
   await ensureSchema();
 
-  const [classRows] = await pool.query<RowDataPacket[]>(`SELECT id FROM classes WHERE class_code = ? LIMIT 1`, [input.classId]);
-  if (classRows.length === 0) {
+  const classRow = await get<{ id: number }>(`SELECT id FROM classes WHERE class_code = ? LIMIT 1`, [input.classId]);
+  if (!classRow) {
     throw new Error(`Class ${input.classId} does not exist. Create or map fees for the class first.`);
   }
 
-  const classPk = Number(classRows[0].id);
-
-  await pool.query(
+  await run(
     `
-      INSERT INTO students (student_id, first_name, last_name, class_id)
-      VALUES (?, COALESCE(?, 'Unknown'), COALESCE(?, 'Student'), ?)
-      ON DUPLICATE KEY UPDATE
-        first_name = VALUES(first_name),
-        last_name = VALUES(last_name),
-        class_id = VALUES(class_id),
+      INSERT INTO students (student_id, first_name, last_name, class_id, updated_at)
+      VALUES (?, COALESCE(?, 'Unknown'), COALESCE(?, 'Student'), ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(student_id)
+      DO UPDATE SET
+        first_name = excluded.first_name,
+        last_name = excluded.last_name,
+        class_id = excluded.class_id,
         updated_at = CURRENT_TIMESTAMP
     `,
-    [input.studentId, input.firstName || null, input.lastName || null, classPk],
+    [input.studentId, input.firstName ?? null, input.lastName ?? null, classRow.id],
   );
 
   return getStudentByStudentId(input.studentId);
@@ -240,7 +271,7 @@ export async function assignStudentToClass(input: {
 export async function removeStudentFromClass(classId: string, studentId: string) {
   await ensureSchema();
 
-  const [result] = await pool.query<ResultSetHeader>(
+  const result = await run(
     `
       UPDATE students
       SET class_id = NULL, updated_at = CURRENT_TIMESTAMP
@@ -250,7 +281,7 @@ export async function removeStudentFromClass(classId: string, studentId: string)
     [studentId, classId],
   );
 
-  return result.affectedRows > 0;
+  return result.changes > 0;
 }
 
 export async function lookupPaymentDetails(studentIds: string[]) {
@@ -266,7 +297,7 @@ export async function lookupPaymentDetails(studentIds: string[]) {
   }
 
   const placeholders = cleanedIds.map(() => '?').join(', ');
-  const [rows] = await pool.query<StudentRecord[]>(
+  const rows = await all<Record<string, unknown>>(
     `
       SELECT
         students.student_id,
@@ -274,7 +305,7 @@ export async function lookupPaymentDetails(studentIds: string[]) {
         students.last_name,
         classes.class_code,
         classes.class_name,
-        CAST(classes.fee_amount AS CHAR) AS fee_amount
+        CAST(classes.fee_amount AS TEXT) AS fee_amount
       FROM students
       LEFT JOIN classes ON classes.id = students.class_id
       WHERE students.student_id IN (${placeholders})
@@ -283,11 +314,12 @@ export async function lookupPaymentDetails(studentIds: string[]) {
     cleanedIds,
   );
 
-  const foundIds = new Set(rows.map((row) => row.student_id));
-  const totalFee = rows.reduce((sum, row) => sum + Number(row.fee_amount ?? 0), 0);
+  const students = rows.map((row) => mapStudentRow(row)).filter((row): row is StudentRecord => row !== null);
+  const foundIds = new Set(students.map((row) => row.student_id));
+  const totalFee = students.reduce((sum, row) => sum + Number(row.fee_amount ?? 0), 0);
 
   return {
-    students: rows,
+    students,
     totalFee,
     missingStudentIds: cleanedIds.filter((studentId) => !foundIds.has(studentId)),
   };
@@ -296,12 +328,12 @@ export async function lookupPaymentDetails(studentIds: string[]) {
 export async function getAdminDashboardData() {
   await ensureSchema();
 
-  const [classesRows] = await pool.query<ClassDashboardRecord[]>(
+  const classesRows = await all<ClassDashboardRecord>(
     `
       SELECT
         classes.class_code,
         classes.class_name,
-        CAST(classes.fee_amount AS CHAR) AS fee_amount,
+        CAST(classes.fee_amount AS TEXT) AS fee_amount,
         COUNT(students.id) AS student_count
       FROM classes
       LEFT JOIN students ON students.class_id = classes.id
@@ -310,7 +342,7 @@ export async function getAdminDashboardData() {
     `,
   );
 
-  const [studentsRows] = await pool.query<StudentRecord[]>(
+  const studentsRows = await all<Record<string, unknown>>(
     `
       SELECT
         students.student_id,
@@ -318,7 +350,7 @@ export async function getAdminDashboardData() {
         students.last_name,
         classes.class_code,
         classes.class_name,
-        CAST(classes.fee_amount AS CHAR) AS fee_amount
+        CAST(classes.fee_amount AS TEXT) AS fee_amount
       FROM students
       LEFT JOIN classes ON classes.id = students.class_id
       ORDER BY students.student_id ASC
@@ -339,13 +371,16 @@ export async function getAdminDashboardData() {
       feeDisplay: formatter.format(Number(row.fee_amount)),
       studentCount: Number(row.student_count),
     })),
-    students: studentsRows.map((student) => ({
-      studentId: student.student_id,
-      fullName: `${student.first_name} ${student.last_name}`,
-      classCode: student.class_code,
-      className: student.class_name,
-      feeAmount: Number(student.fee_amount ?? 0),
-      feeDisplay: formatter.format(Number(student.fee_amount ?? 0)),
-    })),
+    students: studentsRows
+      .map((student) => mapStudentRow(student))
+      .filter((student): student is StudentRecord => student !== null)
+      .map((student) => ({
+        studentId: student.student_id,
+        fullName: `${student.first_name} ${student.last_name}`,
+        classCode: student.class_code,
+        className: student.class_name,
+        feeAmount: Number(student.fee_amount ?? 0),
+        feeDisplay: formatter.format(Number(student.fee_amount ?? 0)),
+      })),
   };
 }

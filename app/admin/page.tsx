@@ -175,9 +175,9 @@ export default async function AdminDashboardPage({
           <section className="panel">
             <h2>How to fix it</h2>
             <ol>
-              <li>Start a MySQL server on the configured host and port.</li>
-              <li>Update your <code>.env.local</code> values if MySQL is not running on <code>127.0.0.1:3306</code>.</li>
-              <li>Refresh this page after the database is reachable.</li>
+              <li>Make sure the app can create and write to your SQLite database file path.</li>
+              <li>Update your <code>.env.local</code> if you want the database stored somewhere other than <code>./data/fees.sqlite</code>.</li>
+              <li>Refresh this page after fixing the file path or permissions.</li>
             </ol>
           </section>
         </section>
